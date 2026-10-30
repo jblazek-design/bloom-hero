@@ -1,7 +1,7 @@
 /* Bloom — hand-tracked hero
    Video 1: frame sequence scrubbed by hand openness (fist = closed, open hand = full bloom)
-   Snap   : bloom → Video 2 (burn). Snap again → Video 3 (reverse back to bloom).
-   Keys   : Space = snap · M = mouse control · C = camera ghost · D = debug values
+   Clap / palms together (or snap): bloom → Video 2 (burn). Again → Video 3 (back to bloom).
+   Keys   : Space = trigger · M = mouse control · C = camera feed on/off · D = debug values
 */
 import { FilesetResolver, HandLandmarker } from './vendor/mediapipe/vision_bundle.mjs';
 
@@ -14,12 +14,17 @@ const CFG = {
   openLo: 1.05,          // ≈ fist
   openHi: 1.80,          // ≈ open hand
   follow: 4.5,           // how fast the video follows your hand (higher = snappier)
-  // snap: thumb+middle pinched, then within ~0.4 s the middle finger flicks down into the palm
+  // clap / palms together (two hands): main trigger
+  clapHit: 1.3,          // palm centres closer than this (palm lengths) = clap
+  clapArm: 2.0,          // hands must be at least this far apart first
+  // snap (one hand): thumb+middle pinched, then within ~0.4 s the middle finger flicks into the palm
   snapPinch: 0.42,       // thumb-tip ↔ middle-tip, palm units
+  snapIndex: 1.35,       // index finger still extended = "about to snap", not a fist
+  snapHold: 450,         // ms the flowers stay frozen after the snap pose is seen
   snapRelease: 0.75,
   snapDrop: 0.22,        // middle tip must drop this much toward the wrist
   snapWindow: 420,       // ms
-  snapCooldown: 1300,    // ms
+  snapCooldown: 1300,    // ms (shared by clap and snap)
   // text cues inside videos 2 / 3 (seconds)
   burnTextIn: 2.5,
   restoreTextOut: 1.3,
@@ -43,9 +48,10 @@ const S = {
   t: 0, targetT: 0,     // openness 0..1 (displayed / target)
   lastIdx: -1, dirty: true,
   input: 'camera',      // camera | mouse
-  hand: null, handAt: 0, ratio: null,
-  hist: [], lastSnap: -1e9, snapQueued: false,
-  showCam: false, debug: false,
+  hands: [], handAt: 0, ratio: null,
+  hist: {}, lastSnap: -1e9, snapQueued: false,
+  frozen: false, frozenUntil: 0, clapArmed: false, clapDist: null, lastTwo: null,
+  showCam: true, debug: false,
   cue: {},              // one-shot text cues per video run
   loadP: 0, camStatus: 'starting',
   view: null,           // skeleton auto-framing
@@ -176,7 +182,8 @@ function snap(source = 'gesture') {
   if (now - S.lastSnap < CFG.snapCooldown) return;
   if (S.phase === 'loading' || S.phase === 'toBurn' || S.phase === 'restore') return;
   S.lastSnap = now;
-  S.hist.length = 0;
+  S.hist = {};
+  S.frozenUntil = 0;
   pulse();
 
   if (S.phase === 'bloom') {
@@ -246,35 +253,37 @@ function tick(now) {
 let lastLabel = '';
 function updateUI() {
   let label, m;
-  const hasHand = S.hand && performance.now() - S.handAt < 400;
-  media.classList.toggle('has-hand', !!hasHand || S.input === 'mouse');
+  const hasHand = S.hands.length > 0 && performance.now() - S.handAt < 400;
+  media.classList.toggle('has-hand', hasHand || S.input === 'mouse' || (S.showCam && S.camStatus === 'live'));
 
   switch (S.phase) {
     case 'loading': label = `Loading ${Math.round(S.loadP * 100)}%`; m = S.loadP; break;
     case 'bloom':
       m = S.t;
       if (S.input === 'mouse') label = S.camStatus === 'denied' || S.camStatus === 'error'
-        ? 'No camera · move mouse · space = snap' : 'Mouse mode · space = snap';
+        ? 'No camera · move mouse · space = clap' : 'Mouse mode · space = clap';
       else if (S.camStatus !== 'live') label = S.camStatus === 'starting' ? 'Starting camera' : 'Loading hand model';
       else if (!hasHand) label = 'Show your hand';
-      else label = S.t > 0.9 ? 'Snap your fingers' : 'Open your hand';
+      else if (S.frozen) label = 'Hold…';
+      else label = S.t > 0.9 ? 'Clap or snap' : 'Open your hand';
       break;
-    case 'toBurn': label = 'Snap'; m = 1; break;
+    case 'toBurn': label = '✦'; m = 1; break;
     case 'burn':
       m = v2.duration ? v2.currentTime / v2.duration : 0;
-      label = v2.ended ? 'Snap to bring them back' : (S.snapQueued ? 'Queued' : 'Burning');
+      label = v2.ended ? 'Clap to bring them back' : (S.snapQueued ? 'Queued' : 'Burning');
       break;
     case 'restore': m = v3.duration ? 1 - v3.currentTime / v3.duration : 0; label = 'Blooming'; break;
   }
   if (label !== lastLabel) { labelEl.textContent = label; lastLabel = label; }
   meterEl.style.transform = `scaleX(${clamp01(m || 0).toFixed(4)})`;
 
-  drawSkeleton();
+  drawBox();
   if (S.debug) {
     const h = S._dbg || {};
     debugEl.textContent =
-      `phase ${S.phase}\ninput ${S.input}\nratio ${(S.ratio ?? 0).toFixed(2)}  [${CFG.openLo.toFixed(2)}–${CFG.openHi.toFixed(2)}]\n` +
-      `open  ${S.targetT.toFixed(2)}\npinch ${(h.d ?? 0).toFixed(2)}\nmid   ${(h.m ?? 0).toFixed(2)}`;
+      `phase ${S.phase}  hands ${S.hands.length}\nratio ${(S.ratio ?? 0).toFixed(2)}  [${CFG.openLo.toFixed(2)}–${CFG.openHi.toFixed(2)}]\n` +
+      `open  ${S.targetT.toFixed(2)}${S.frozen ? '  (frozen)' : ''}\npinch ${(h.d ?? 0).toFixed(2)}  mid ${(h.m ?? 0).toFixed(2)}\n` +
+      `clap  ${S.clapDist == null ? '–' : S.clapDist.toFixed(2)}${S.clapArmed ? '  armed' : ''}`;
   }
 }
 
@@ -299,7 +308,7 @@ async function initCamera() {
     const fileset = await FilesetResolver.forVisionTasks(new URL('vendor/mediapipe/wasm', location.href).href);
     const opts = delegate => ({
       baseOptions: { modelAssetPath: new URL('vendor/mediapipe/hand_landmarker.task', location.href).href, delegate },
-      runningMode: 'VIDEO', numHands: 1,
+      runningMode: 'VIDEO', numHands: 2,
       minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
     });
     try { landmarker = await HandLandmarker.createFromOptions(fileset, opts('GPU')); }
@@ -318,92 +327,119 @@ function detectLoop() {
     lastCamTime = cam.currentTime;
     const now = performance.now();
     const res = landmarker.detectForVideo(cam, now);
-    onHand(res.landmarks?.[0] || null, now);
+    const lms = res.landmarks || [];
+    const sides = (res.handedness || res.handednesses || []).map(h => h?.[0]?.categoryName || '');
+    onHands(lms, sides, now);
   }
   requestAnimationFrame(detectLoop);
 }
 
-function onHand(lm, now) {
-  if (!lm) { S.hand = null; return; }
+const d3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+const palmCenter = P => {
+  let x = 0, y = 0, z = 0;
+  for (const i of [0, 5, 9, 13, 17]) { x += P[i].x; y += P[i].y; z += P[i].z; }
+  return { x: x / 5, y: y / 5, z: z / 5 };
+};
+
+function onHands(lms, sides, now) {
   const aw = cam.videoWidth || 640, ah = cam.videoHeight || 480;
-  const P = lm.map(p => ({ x: p.x * aw, y: p.y * ah, z: p.z * aw }));
-  S.hand = P; S.handAt = now;
-  const d3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+  const hands = lms.map((lm, i) => {
+    const P = lm.map(p => ({ x: p.x * aw, y: p.y * ah, z: p.z * aw }));
+    const palm = Math.max(1, d3(P[0], P[9]));
+    const ratio = ([8, 12, 16, 20].reduce((s, k) => s + d3(P[k], P[0]), 0) / 4) / palm;
+    return { P, palm, ratio, side: sides[i] || String(i), c: palmCenter(P) };
+  });
+  S.hands = hands;
+  if (!hands.length) { detectClap(hands, now); return; }
+  S.handAt = now;
 
-  const palm = Math.max(1, d3(P[0], P[9]));
-  const ratio = ([8, 12, 16, 20].reduce((s, i) => s + d3(P[i], P[0]), 0) / 4) / palm;
+  // openness = average of visible hands
+  const ratio = hands.reduce((s, h) => s + h.ratio, 0) / hands.length;
   S.ratio = S.ratio == null ? ratio : S.ratio * 0.55 + ratio * 0.45;
-
-  // gentle self-calibration: widen the range if your fist / open hand goes beyond it
   if (S.ratio < CFG.openLo) CFG.openLo = Math.max(0.75, CFG.openLo + (S.ratio - CFG.openLo) * 0.05);
   if (S.ratio > CFG.openHi) CFG.openHi = Math.min(2.3, CFG.openHi + (S.ratio - CFG.openHi) * 0.05);
 
-  if (S.input === 'camera') S.targetT = clamp01((S.ratio - CFG.openLo) / (CFG.openHi - CFG.openLo));
+  // snap prep (thumb on middle finger, index still extended) → hold the flowers where they are
+  let prep = false;
+  for (const h of hands) if (detectSnap(h, now)) prep = true;
+  if (prep) S.frozenUntil = now + CFG.snapHold;
+  S.frozen = now < S.frozenUntil;
 
-  detectSnap(P, palm, now, d3);
+  if (S.input === 'camera' && !S.frozen) S.targetT = clamp01((S.ratio - CFG.openLo) / (CFG.openHi - CFG.openLo));
+
+  detectClap(hands, now);
 }
 
-function detectSnap(P, palm, now, d3) {
-  const d = d3(P[4], P[12]) / palm;   // thumb tip ↔ middle tip
-  const m = d3(P[12], P[0]) / palm;   // middle tip ↔ wrist
-  S._dbg = { d, m };
-  S.hist.push({ t: now, d, m });
-  while (S.hist.length && now - S.hist[0].t > CFG.snapWindow) S.hist.shift();
-
-  if (d < CFG.snapRelease) return;
-  for (const h of S.hist) {
-    if (h.d < CFG.snapPinch && m < h.m - CFG.snapDrop && now - h.t > 15) { snap('gesture'); return; }
+// Clap / palms together: two hands, palm centres come within ~1.3 palm lengths.
+// Also counts it when two close hands suddenly merge into one detection (they often do on contact).
+function detectClap(hands, now) {
+  if (hands.length >= 2) {
+    const [a, b] = hands;
+    const dist = d3(a.c, b.c) / ((a.palm + b.palm) / 2);
+    S.clapDist = dist;
+    S.lastTwo = { t: now, dist };
+    if (dist > CFG.clapArm) S.clapArmed = true;
+    if (S.clapArmed && dist < CFG.clapHit) { S.clapArmed = false; snap('clap'); }
+  } else {
+    S.clapDist = null;
+    const lt = S.lastTwo;
+    if (S.clapArmed && lt && now - lt.t < 260 && lt.dist < CFG.clapHit * 1.5) { S.clapArmed = false; snap('clap'); }
   }
 }
 
-// skeleton — auto-framed so the hand always sits nicely in the box (like the Figma placeholder)
+// returns true while the hand is in the "about to snap" pose
+function detectSnap(h, now) {
+  const { P, palm, side } = h;
+  const d = d3(P[4], P[12]) / palm;     // thumb tip ↔ middle tip
+  const m = d3(P[12], P[0]) / palm;     // middle tip ↔ wrist
+  const idx = d3(P[8], P[0]) / palm;    // index extension
+  S._dbg = { d, m };
+  const hist = S.hist[side] || (S.hist[side] = []);
+  hist.push({ t: now, d, m });
+  while (hist.length && now - hist[0].t > CFG.snapWindow) hist.shift();
+
+  const prep = d < CFG.snapPinch && idx > CFG.snapIndex;
+  if (d >= CFG.snapRelease) {
+    for (const e of hist) {
+      if (e.d < CFG.snapPinch && m < e.m - CFG.snapDrop && now - e.t > 15) { snap('snap'); hist.length = 0; break; }
+    }
+  }
+  return prep;
+}
+
+// ─────────────────────────────── media box: live camera + skeleton
 const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
                [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
-function drawSkeleton() {
+function drawBox() {
   const W = skel.width, H = skel.height;
   sctx.clearRect(0, 0, W, H);
-  const P = S.hand && performance.now() - S.handAt < 400 ? S.hand : null;
   const dpr = W / (media.clientWidth || 1);
+  const aw = cam.videoWidth || 640, ah = cam.videoHeight || 480;
+  // cover-fit the camera into the portrait box, mirrored like a selfie
+  const s = Math.max(W / aw, H / ah);
+  const ox = (W - aw * s) / 2, oy = (H - ah * s) / 2;
 
-  if (!P) { if (S.showCam && cam.readyState >= 2) ghost(null, W, H); return; }
-
-  // target framing: centre of the hand → box centre, palm length → 21% of box height
-  let cx = 0, cy = 0; for (const p of P) { cx += p.x; cy += p.y; } cx /= 21; cy /= 21;
-  const palm = Math.hypot(P[0].x - P[9].x, P[0].y - P[9].y) || 1;
-  const s = (H * 0.21) / palm;
-  if (!S.view) S.view = { cx, cy, s };
-  S.view.cx += (cx - S.view.cx) * 0.25;
-  S.view.cy += (cy - S.view.cy) * 0.25;
-  S.view.s += (s - S.view.s) * 0.12;
-  const V = S.view;
-  const map = p => ({ x: W / 2 - (p.x - V.cx) * V.s, y: H * 0.5 + (p.y - V.cy) * V.s }); // mirrored
-
-  if (S.showCam && cam.readyState >= 2) ghost(V, W, H);
-
-  const Q = P.map(map);
-  sctx.strokeStyle = '#fff'; sctx.lineWidth = 1 * dpr; sctx.lineJoin = 'round';
-  sctx.beginPath();
-  for (const [a, b] of BONES) { sctx.moveTo(Q[a].x, Q[a].y); sctx.lineTo(Q[b].x, Q[b].y); }
-  sctx.stroke();
-  sctx.fillStyle = '#fff';
-  const r = 2.64 * dpr;
-  for (const q of Q) { sctx.beginPath(); sctx.arc(q.x, q.y, r, 0, Math.PI * 2); sctx.fill(); }
-}
-function ghost(V, W, H) {
-  const aw = cam.videoWidth, ah = cam.videoHeight;
-  sctx.save();
-  sctx.globalAlpha = 0.28;
-  sctx.filter = 'grayscale(1) contrast(1.2)';
-  if (V) {
-    sctx.translate(W / 2 + V.cx * V.s, H / 2 - V.cy * V.s);
-    sctx.scale(-V.s, V.s);
-    sctx.drawImage(cam, 0, 0, aw, ah);
-  } else {
-    const s = Math.max(W / aw, H / ah);
+  if (S.showCam && cam.readyState >= 2) {
+    sctx.save();
     sctx.translate(W, 0); sctx.scale(-1, 1);
-    sctx.drawImage(cam, (W - aw * s) / 2, (H - ah * s) / 2, aw * s, ah * s);
+    sctx.drawImage(cam, ox, oy, aw * s, ah * s);
+    sctx.restore();
+    sctx.fillStyle = 'rgba(0,0,0,.28)';           // keeps the white skeleton readable
+    sctx.fillRect(0, 0, W, H);
   }
-  sctx.restore();
+
+  if (!S.hands.length || performance.now() - S.handAt > 400) return;
+  const map = p => ({ x: W - (ox + p.x * s), y: oy + p.y * s });
+  sctx.strokeStyle = '#fff'; sctx.fillStyle = '#fff';
+  sctx.lineWidth = 1 * dpr; sctx.lineJoin = 'round';
+  const r = 2.64 * dpr;
+  for (const h of S.hands) {
+    const Q = h.P.map(map);
+    sctx.beginPath();
+    for (const [a, b] of BONES) { sctx.moveTo(Q[a].x, Q[a].y); sctx.lineTo(Q[b].x, Q[b].y); }
+    sctx.stroke();
+    for (const q of Q) { sctx.beginPath(); sctx.arc(q.x, q.y, r, 0, Math.PI * 2); sctx.fill(); }
+  }
 }
 
 // ─────────────────────────────── fallbacks & keys
@@ -417,7 +453,7 @@ addEventListener('keydown', e => {
 });
 
 // test hook (used for automated checks; harmless in production)
-window.__bloom = { S, CFG, snap, onHand };
+window.__bloom = { S, CFG, snap, onHands };
 
 // ─────────────────────────────── boot
 resize();

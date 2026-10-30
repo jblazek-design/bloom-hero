@@ -11,16 +11,19 @@ The camera only works over `http://localhost` (or HTTPS), not when you double-cl
 | Gesture | What happens |
 |---|---|
 | Fist → open hand (slowly) | Video 1 scrubs frame by frame: buds → full bloom. Each word of the text blooms in with it. |
-| Snap your fingers (thumb + middle) | The flowers finish opening and Video 2 plays (bloom → burn). The text changes to "nvm ;)". |
-| Snap again | Video 3 plays (burn → bloom), the original text comes back, and your hand controls the flowers again. |
+| **Clap / bring both open palms together** | The flowers finish opening and Video 2 plays (bloom → burn). The text changes to "nvm ;)". |
+| Clap again | Video 3 plays (burn → bloom), the original text comes back, and your hand controls the flowers again. |
+| Snap (backup) | Same as a clap. As soon as the snap pose shows (thumb on middle finger, index still out), the flowers freeze, so they don't close while you snap. |
 
-Fallbacks: **Space** or a **click** = snap · **M** = mouse mode (move left↔right to open) · **C** = show a faint camera feed in the box · **D** = live values for tuning.
+The black box shows the live camera (mirrored) with the hand skeleton on top.
+Keys: **Space** or a **click** = trigger · **M** = mouse mode (move left↔right to open) · **C** = camera feed on/off · **D** = live values for tuning.
 
 ## Tuning
 All thresholds are at the top of `app.js` (`CFG`):
 - `openLo` / `openHi`: hand openness range (press D to see your live `ratio`; fist ≈ 0.8–1.1, open hand ≈ 1.8–2.0). The range also adjusts itself slightly as you use it.
 - `follow`: how quickly the video follows your hand.
-- `snapPinch`, `snapDrop`, `snapWindow`: snap sensitivity.
+- `clapHit` / `clapArm`: how close the palms must get (and how far apart they start) for a clap.
+- `snapPinch`, `snapIndex`, `snapHold`, `snapDrop`, `snapWindow`: snap sensitivity and freeze.
 - `burnTextIn`, `restoreTextOut`, `restoreTextIn`: when the text changes during videos 2 and 3.
 
 ## Font
