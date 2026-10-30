@@ -1,0 +1,166 @@
+/* PP Editorial Old is used if installed locally or dropped into /fonts.
+   Instrument Serif (Google Fonts) is the fallback. */
+@font-face {
+  font-family: 'Editorial';
+  src: local('PP Editorial Old Regular'), local('PPEditorialOld-Regular'), local('PP Editorial Old'),
+       url('fonts/PPEditorialOld-Regular.woff2') format('woff2');
+  font-style: normal; font-weight: 400; font-display: swap;
+}
+@font-face {
+  font-family: 'Editorial';
+  src: local('PP Editorial Old Italic'), local('PPEditorialOld-Italic'),
+       url('fonts/PPEditorialOld-Italic.woff2') format('woff2');
+  font-style: italic; font-weight: 400; font-display: swap;
+}
+
+:root {
+  /* Figma frame is 1728 × 1117 — everything scales from it */
+  --pad: clamp(20px, 2.778vw, 64px);          /* 48px */
+  --fs: clamp(30px, 3.241vw, 84px);           /* 56px */
+  --ease: cubic-bezier(.19, 1, .22, 1);
+  --blue: #04568e;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: var(--blue); color: #fff; }
+body { -webkit-font-smoothing: antialiased; }
+
+.hero {
+  position: relative;
+  height: 100vh;
+  height: 100svh;
+  overflow: hidden;
+  background: var(--blue);
+  cursor: default;
+  user-select: none;
+}
+
+#bg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#v2, #v3, #cam { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+/* ───────── Copy ───────── */
+.copy {
+  position: absolute;
+  left: var(--pad);
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: 'Editorial', 'Instrument Serif', Georgia, serif;
+  font-weight: 400;
+  font-size: var(--fs);
+  line-height: 1.142857;                       /* 64 / 56 */
+  letter-spacing: -0.015em;
+  pointer-events: none;
+}
+.has-editorial .copy { letter-spacing: -0.05em; }  /* -2.8px @ 56px, as in Figma */
+
+.txt { font: inherit; letter-spacing: inherit; }
+.txt-b { position: absolute; left: 0; top: 50%; transform: translateY(-50%); white-space: nowrap; }
+.line { display: block; white-space: nowrap; }
+.txt em { font-style: italic; }
+
+/* word / char mask */
+.w {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: top;
+  padding: .12em .12em .2em;
+  margin: -.12em -.12em -.2em;
+}
+.wi {
+  display: inline-block;
+  transform: translate3d(0, 112%, 0);
+  transition: transform 1.15s var(--ease), filter .8s var(--ease), color .5s ease, opacity .8s ease;
+}
+.txt.in .wi {
+  transform: none;
+  transition-delay: calc(var(--i) * 38ms + 60ms);
+}
+/* exit: words lift out, catch fire, dissolve */
+.txt.out .wi {
+  transform: translate3d(0, -112%, 0);
+  filter: blur(8px);
+  color: #ffbf80;
+  opacity: 0;
+  transition-duration: .8s, .6s, .25s, .7s;
+  transition-timing-function: cubic-bezier(.7, 0, .84, 0), ease, ease, ease;
+  transition-delay: calc(var(--i) * 22ms);
+}
+.txt.no-tr .wi { transition: none !important; }
+
+/* openness — each word "blooms" as the hand opens */
+.wp {
+  display: inline-block;
+  opacity: calc(.5 + .5 * var(--p, 1));
+  filter: blur(calc((1 - var(--p, 1)) * 2.5px));
+  transform: translate3d(0, calc((1 - var(--p, 1)) * .12em), 0);
+}
+
+/* "nvm ;)" — chars tip up from the baseline */
+.txt-b .wi { transform: translate3d(0, 112%, 0) rotate(12deg); transform-origin: 0 100%; }
+.txt-b.in .wi { transform: none; transition-delay: calc(var(--i) * 75ms + 40ms); transition-duration: 1.3s; }
+.txt-b.in .wp { animation: ember 3s ease-in-out infinite; animation-delay: calc(var(--i) * -400ms); }
+@keyframes ember {
+  0%, 100% { text-shadow: 0 0 .35em rgba(255, 150, 70, .0); }
+  50%      { text-shadow: 0 0 .45em rgba(255, 150, 70, .35); }
+}
+
+/* ───────── Media box (hand tracker) ───────── */
+.media {
+  position: absolute;
+  right: var(--pad);
+  bottom: var(--pad);
+  width: clamp(150px, 14.468vw, 340px);        /* 250px */
+  aspect-ratio: 250 / 312;
+  background: #000;
+  border: 1px solid #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: box-shadow .6s var(--ease);
+}
+.media.snapped { box-shadow: 0 0 0 1px #fff, 0 0 40px rgba(255, 255, 255, .45); transition-duration: .05s; }
+#skel { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.idle {
+  position: absolute;
+  left: 42%; top: 29.5%;                       /* 105 / 250, 92 / 312 */
+  width: 41.835%;                              /* 104.588 / 250 */
+  height: auto;
+  transition: opacity .5s ease;
+  animation: breathe 2.8s ease-in-out infinite;
+}
+.media.has-hand .idle { opacity: 0; animation: none; }
+@keyframes breathe { 0%, 100% { opacity: .9; } 50% { opacity: .45; } }
+
+.label {
+  position: absolute;
+  left: 10px; right: 10px; bottom: 10px;
+  font: 500 9.5px/1.3 ui-sans-serif, system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, .62);
+  transition: opacity .3s;
+}
+.meter { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: rgba(255, 255, 255, .1); }
+.meter i { display: block; height: 100%; width: 100%; background: #fff; transform-origin: 0 50%; transform: scaleX(0); }
+
+.debug {
+  position: absolute; left: 8px; top: 8px;
+  font: 10px/1.35 ui-monospace, Menlo, monospace;
+  color: #9f9;
+  white-space: pre;
+}
+
+/* snap shockwave */
+.ring {
+  position: absolute;
+  width: 60px; height: 60px;
+  margin: -30px 0 0 -30px;
+  border: 1px solid rgba(255, 255, 255, .9);
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wi, .txt.in .wi, .txt.out .wi { transition-duration: .01s !important; transition-delay: 0s !important; }
+  .idle, .txt-b.in .wp { animation: none; }
+}
