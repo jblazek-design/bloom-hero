@@ -293,10 +293,24 @@ let landmarker = null;
 async function initCamera() {
   if (!navigator.mediaDevices?.getUserMedia) { S.camStatus = 'error'; S.input = 'mouse'; return; }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user', frameRate: { ideal: 60 } },
-      audio: false,
-    });
+    const base = { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 } };
+    let stream = await navigator.mediaDevices.getUserMedia({ video: { ...base, facingMode: 'user' }, audio: false });
+    // Prefer an external camera (Apple Studio Display) over the built-in one.
+    // Device labels are only readable after permission, hence the second pass.
+    try {
+      const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+      const pick = cams.find(d => /studio display/i.test(d.label));
+      const current = stream.getVideoTracks()[0]?.getSettings().deviceId;
+      if (pick && pick.deviceId !== current) {
+        stream.getTracks().forEach(t => t.stop());
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: { ...base, deviceId: { exact: pick.deviceId } }, audio: false });
+        } catch (e) {
+          console.warn('Studio Display camera failed, falling back:', e);
+          stream = await navigator.mediaDevices.getUserMedia({ video: { ...base, facingMode: 'user' }, audio: false });
+        }
+      }
+    } catch (e) { console.warn('Camera switch failed, using default:', e); }
     cam.srcObject = stream;
     await cam.play();
     S.camStatus = 'model';
